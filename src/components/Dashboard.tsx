@@ -21,7 +21,7 @@ const Dashboard = () => {
 
   return (
     <Stack direction={'column'} alignItems="center" spacing={2} sx={{ mt: 5 }} >
-      <DivisionVisualizer data={divisionData} />
+      <DivisionVisualizer />
     </Stack >
   )
 }

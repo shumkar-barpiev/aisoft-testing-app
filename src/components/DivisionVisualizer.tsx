@@ -1,18 +1,20 @@
 "use client";
 
-
 import {
   Box,
   Button,
   Typography,
   CardContent,
+  Stack,
+  Divider,
+  useTheme,
+  Paper,
+  TextField,
 } from "@mui/material";
-import {
-  Stack, Divider, useTheme, Paper
-} from "@mui/material"
-import { motion } from "framer-motion";
-import React, { useMemo, useState } from "react";
 
+import React, { useState, useMemo } from "react";
+import { useForm, Controller } from "react-hook-form";
+import { JSX } from "react/jsx-runtime";
 
 type Step = {
   Id: number;
@@ -21,47 +23,315 @@ type Step = {
   Sum: number;
   Hint: string;
   Side: "left" | "right";
-  CarryIn?: number;
-  CarryOut?: number;
-  ParentHint?: string;
+  action: "divide" | "multiply" | "subtract" | "bringDown";
 };
 
-type DivisionData = {
-  Numbers: readonly number[];
+type DivisionState = {
   Steps: readonly Step[];
-  correctAnswer: number;
+  currentStepIndex: number;
+  currentInput: string;
+  quotientDigits: (number | null)[];
+  remainderHistory: number[];
+  isCompleted: boolean;
 };
 
-type DivisionProps = {
-  data: DivisionData;
+type FormValues = {
+  dividend: number;
+  divisor: number;
 };
 
-export default function DivisionVisualizer({ data }: DivisionProps) {
+
+const generateSteps = (
+  initialDividend: number,
+  divisor: number
+): Step[] => {
+  if (divisor === 0) return [];
+
+  const steps: Step[] = [];
+  let stepId = 0;
+  let dividendStr = String(initialDividend);
+  let remainder = 0;
+  let currentDividendPartStr = "";
+  let currentQuotientIndex = 0;
+
+  for (let i = 0; i < dividendStr.length || remainder !== 0; i++) {
+    if (i < dividendStr.length) {
+      currentDividendPartStr += dividendStr[i];
+    }
+    let currentDividendPart = remainder * 10 + (i < dividendStr.length ? parseInt(dividendStr[i]) : 0);
+
+    if (i === 0) {
+      currentDividendPart = parseInt(dividendStr.substring(0, String(divisor).length));
+      if (currentDividendPart < divisor && dividendStr.length > String(divisor).length) {
+        currentDividendPart = parseInt(dividendStr.substring(0, String(divisor).length + 1));
+        currentDividendPartStr = dividendStr.substring(0, String(divisor).length + 1);
+        i = String(divisor).length;
+      } else if (currentDividendPart < divisor && dividendStr.length === String(divisor).length) {
+        currentDividendPart = parseInt(dividendStr.substring(0, String(divisor).length));
+        currentDividendPartStr = dividendStr.substring(0, String(divisor).length);
+        i = String(divisor).length - 1;
+      } else {
+        currentDividendPartStr = dividendStr.substring(0, String(divisor).length);
+        i = String(divisor).length - 1;
+      }
+    } else {
+      if (currentDividendPart === remainder * 10 && i < dividendStr.length) {
+        steps.push({
+          Id: stepId++,
+          D1: remainder,
+          D2: parseInt(dividendStr[i]),
+          Sum: remainder * 10 + parseInt(dividendStr[i]),
+          Hint: `Спускаем цифру ${dividendStr[i]}. Получаем ${remainder * 10 + parseInt(dividendStr[i])}.`,
+          Side: "left",
+          action: "bringDown",
+        });
+        currentDividendPart = remainder * 10 + parseInt(dividendStr[i]);
+        remainder = currentDividendPart;
+      }
+    }
+
+
+    if (currentDividendPart < divisor && i < dividendStr.length - 1 && steps.length > 0 && steps[steps.length - 1].action !== 'bringDown') {
+      continue;
+    }
+
+    const D1_for_division = remainder === 0 ? currentDividendPart : currentDividendPart;
+
+
+    if (D1_for_division > 0 || i >= dividendStr.length - 1) {
+      const quotientDigit = Math.floor(D1_for_division / divisor);
+
+      steps.push({
+        Id: stepId++,
+        D1: D1_for_division,
+        D2: divisor,
+        Sum: quotientDigit,
+        Hint: `Раздели ${D1_for_division} на ${divisor}. Получаем ${quotientDigit}.`,
+        Side: "right",
+        action: "divide",
+      });
+
+      const product = quotientDigit * divisor;
+      steps.push({
+        Id: stepId++,
+        D1: quotientDigit,
+        D2: divisor,
+        Sum: product,
+        Hint: `Умножь ${quotientDigit} на ${divisor}. Получаем ${product}.`,
+        Side: "left",
+        action: "multiply",
+      });
+
+      remainder = D1_for_division - product;
+      steps.push({
+        Id: stepId++,
+        D1: D1_for_division,
+        D2: product,
+        Sum: remainder,
+        Hint: `Вычти ${product} из ${D1_for_division}. Остаток: ${remainder}.`,
+        Side: "left",
+        action: "subtract",
+      });
+
+      currentQuotientIndex++;
+    }
+
+    if (remainder === 0 && i >= dividendStr.length - 1) {
+      break;
+    }
+
+    if (i >= dividendStr.length - 1) break;
+  }
+
+  return steps;
+};
+
+
+export default function DivisionVisualizer() {
   const theme = useTheme();
-  const [currentStep, setCurrentStep] = useState(0);
-  const steps = data.Steps;
-  const step = steps[currentStep];
+  const [initialDividend, setInitialDividend] = useState(0);
+  const [initialDivisor, setInitialDivisor] = useState(0);
+  const [isStarted, setIsStarted] = useState(false);
 
-  const dividend = data.Numbers[0];
-  const divisor = data.Numbers[1];
+  const [division, setDivision] = useState<DivisionState>({
+    Steps: [],
+    currentStepIndex: 0,
+    currentInput: "",
+    quotientDigits: [],
+    remainderHistory: [],
+    isCompleted: false,
+  });
 
-  const quotientDigits = useMemo(() => {
-    return steps
-      .filter((s) => s.Side === "right")
-      .map((s) => String(s.Sum));
-  }, [steps]);
+  const { handleSubmit, control } = useForm<FormValues>({
+    defaultValues: { dividend: 0, divisor: 0 },
+  });
 
-  const revealedQuotient = useMemo(() => {
-    const count = steps.filter((s) => s.Side === "right" && s.Id <= step.Id).length;
-    return quotientDigits.slice(0, count);
-  }, [steps, quotientDigits, step.Id]);
+  const currentStep = division.Steps[division.currentStepIndex];
+  const fullQuotient = division.quotientDigits.filter(d => d !== null).join('');
 
-  const nextStep = () => setCurrentStep((s) => Math.min(s + 1, steps.length - 1));
-  const prevStep = () => setCurrentStep((s) => Math.max(s - 1, 0));
-  const reset = () => setCurrentStep(0);
 
-  const isSubtractionStep = (step: Step) => step.Hint?.toLowerCase().includes("вычт");
-  const isBringDownStep = (step: Step) => step.Hint?.toLowerCase().includes("спусти");
+  const generateDivisionSteps = (dividend: number, divisor: number) => {
+    if (divisor === 0) {
+      alert("Divisor cannot be zero!");
+      return;
+    }
+    const steps = generateSteps(dividend, divisor);
+
+    const quotientLength = String(Math.floor(dividend / divisor)).length;
+
+    setDivision({
+      Steps: steps,
+      currentStepIndex: 0,
+      currentInput: "",
+      quotientDigits: Array(quotientLength).fill(null),
+      remainderHistory: [],
+      isCompleted: false,
+    });
+    setIsStarted(true);
+  };
+
+  const checkAnswer = () => {
+    if (!currentStep) return;
+
+    const expected = currentStep.Sum;
+    const input = parseInt(division.currentInput);
+
+    if (input === expected) {
+      const newQuotientDigits = [...division.quotientDigits];
+      const newRemainderHistory = [...division.remainderHistory];
+
+      if (currentStep.action === "divide") {
+        const quotientIndex = division.quotientDigits.findIndex(d => d === null);
+        if (quotientIndex !== -1) {
+          newQuotientDigits[quotientIndex] = input;
+        }
+      } else if (currentStep.action === "subtract") {
+        newRemainderHistory.push(input);
+      } else if (currentStep.action === "multiply") {
+      } else if (currentStep.action === "bringDown") {
+      }
+
+      const nextIndex = division.currentStepIndex + 1;
+      const isCompleted = nextIndex >= division.Steps.length;
+
+      setDivision(prev => ({
+        ...prev,
+        currentStepIndex: nextIndex,
+        currentInput: "",
+        quotientDigits: newQuotientDigits,
+        remainderHistory: newRemainderHistory,
+        isCompleted: isCompleted,
+      }));
+
+    } else {
+      alert("Неправильно! Попробуйте еще раз.");
+    }
+  };
+
+  const currentRemainder = division.remainderHistory.length > 0 ? division.remainderHistory[division.remainderHistory.length - 1] : null;
+
+  const DivisionGrid = useMemo(() => {
+    if (!isStarted || division.Steps.length === 0) return null;
+
+    const initialDividendStr = String(initialDividend);
+    const initialDivisorStr = String(initialDivisor);
+
+    const visualElements: JSX.Element[] = [];
+    let currentY = 0;
+
+    let currentDividendDisplay = initialDividendStr;
+    let quotientDisplay = division.quotientDigits.map(d => d === null ? '_' : d).join('');
+
+    const maxDigits = initialDividendStr.length;
+
+    division.remainderHistory.forEach((remainder, index) => {
+      const stepIndex = index * 3 + 2;
+      const divideStep = division.Steps[stepIndex - 2];
+      const multiplyStep = division.Steps[stepIndex - 1];
+      const subtractStep = division.Steps[stepIndex];
+
+      if (!divideStep || !multiplyStep || !subtractStep) return;
+
+      const isCurrentBlock = index === division.remainderHistory.length - 1 && !division.isCompleted;
+
+      visualElements.push(
+        <Box key={`prod-${index}`} sx={{
+          position: 'absolute',
+          top: `${currentY + 60}px`,
+          right: '40px',
+          width: 100,
+          textAlign: 'right',
+          borderBottom: '1px solid black',
+          opacity: 0.8,
+        }}>
+          <Typography variant="h6" sx={{ fontWeight: 500, color: isCurrentBlock ? theme.palette.error.main : 'inherit' }}>
+            {multiplyStep.Sum}
+          </Typography>
+        </Box>
+      );
+
+      visualElements.push(
+        <Box key={`rem-${index}`} sx={{
+          position: 'absolute',
+          top: `${currentY + 100}px`,
+          right: '40px',
+          width: 100,
+          textAlign: 'right',
+        }}>
+          <Typography variant="h6" sx={{ fontWeight: 700, color: isCurrentBlock ? theme.palette.error.main : 'inherit' }}>
+            {remainder}
+          </Typography>
+        </Box>
+      );
+
+      currentY += 80;
+    });
+
+    return (
+      <Box sx={{ position: 'relative', width: '100%', minHeight: 300 }}>
+        <Box sx={{
+          position: 'absolute',
+          top: '20px',
+          right: '-120px',
+          fontWeight: 700,
+          fontSize: '1.8rem',
+          letterSpacing: 4,
+        }}>
+          {division.quotientDigits.map((digit, i) => (
+            <Typography
+              key={`q-${i}`}
+              component="span"
+              variant="h5"
+              sx={{
+                fontWeight: 700,
+                color: digit === null ? theme.palette.grey[400] : theme.palette.success.main,
+                textDecoration: digit === null ? 'underline' : 'none',
+                mr: '4px'
+              }}
+            >
+              {digit === null ? (
+                currentStep && currentStep.action === 'divide' && i === division.quotientDigits.findIndex(d => d === null) ?
+                  <TextField
+                    value={division.currentInput}
+                    onChange={(e) => setDivision(prev => ({ ...prev, currentInput: e.target.value.slice(0, 1) }))}
+                    size="small"
+                    sx={{ width: 30, mr: 0, p: 0 }}
+                    autoFocus
+                    inputProps={{ style: { padding: '4px 0', textAlign: 'center' } }}
+                  />
+                  : '_'
+              ) : digit}
+            </Typography>
+          ))}
+        </Box>
+
+        <Box sx={{ position: 'relative', width: '100%', minHeight: currentY + 150 }}>
+          {visualElements}
+        </Box>
+      </Box>
+    );
+  }, [initialDividend, initialDivisor, isStarted, division, theme]);
+
 
   return (
     <Paper
@@ -74,9 +344,51 @@ export default function DivisionVisualizer({ data }: DivisionProps) {
         borderRadius: 2,
         backgroundColor: '#ffffff',
         border: '1px solid #e0e0e0',
-        background: 'linear-gradient(90deg, #f8f9fa 0.5px, transparent 0.5px) 0 0 / 20px 100%, linear-gradient(0deg, #e9ecef 0.5px, transparent 0.5px) 0 0 / 100% 24px',
       }}
     >
+      <Box
+        component="form"
+        onSubmit={handleSubmit((data) => {
+          setInitialDividend(data.dividend);
+          setInitialDivisor(data.divisor);
+          generateDivisionSteps(data.dividend, data.divisor);
+        })}
+        sx={{ display: "flex", flexDirection: "row", gap: 2, width: 350, mb: 4 }}
+      >
+        <Controller
+          name="dividend"
+          control={control}
+          rules={{ required: true, min: 1 }}
+          render={({ field }) => (
+            <TextField
+              {...field}
+              label="Делимое"
+              type="number"
+              size="small"
+              error={field.value < initialDivisor && initialDivisor !== 0}
+            />
+          )}
+        />
+
+        <Controller
+          name="divisor"
+          control={control}
+          rules={{ required: true, min: 1 }}
+          render={({ field }) => (
+            <TextField
+              {...field}
+              label="Делитель"
+              type="number"
+              size="small"
+            />
+          )}
+        />
+
+        <Button size="small" type="submit" variant="contained">
+          Начать
+        </Button>
+      </Box>
+
       <CardContent sx={{ p: 0, '&:last-child': { pb: 0 } }}>
         <Typography
           variant="h5"
@@ -85,146 +397,23 @@ export default function DivisionVisualizer({ data }: DivisionProps) {
           gutterBottom
           sx={{ color: theme.palette.primary.main, mb: 4 }}
         >
-          Раздели в столбик
+          {isStarted ? `Деление ${initialDividend} ÷ ${initialDivisor}` : "Деление в столбик"}
         </Typography>
 
         <Stack direction={'row'} sx={{ width: 1, position: 'relative' }}>
-          <Box sx={{ width: "60%", pb: 1, pr: 4 }}>
+          <Box sx={{ width: "60%", pb: 2, pt: 0.5, pr: 4 }}>
             <Typography
               variant="h5"
               sx={{
                 fontWeight: 700,
                 textAlign: 'right',
                 fontSize: '1.8rem',
-                letterSpacing: 2,
+                letterSpacing: 4,
               }}
             >
-              {dividend}
+              {initialDividend}
             </Typography>
-
-            <Box sx={{ mt: 3, minHeight: 120 }}>
-              {steps.slice(0, currentStep + 1).map((s, index) => {
-                if (s.Side !== "left") return null;
-
-                const active = s.Id === step.Id;
-                const isBringDown = isBringDownStep(s);
-
-                return (
-                  <motion.div
-                    key={s.Id}
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ duration: 0.3 }}
-                  >
-                    <Box
-                      sx={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: 'flex-end',
-                        gap: 2,
-                        mb: 1.5,
-                        p: 1,
-                        borderRadius: 1,
-                        backgroundColor: active ? theme.palette.action.hover : 'transparent',
-                      }}
-                    >
-                      {isBringDown ? (
-                        <>
-                          <motion.span
-                            initial={{ y: -20, opacity: 0 }}
-                            animate={{ y: 0, opacity: 1 }}
-                            transition={{ type: "spring", stiffness: 300 }}
-                          >
-                            <Typography
-                              variant="body1"
-                              sx={{
-                                fontWeight: 700,
-                                color: theme.palette.info.main,
-                              }}
-                            >
-                              {s.Sum}
-                            </Typography>
-                          </motion.span>
-                        </>
-                      ) : isSubtractionStep(s) ? (
-                        <>
-                          <Box sx={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            alignItems: 'flex-end',
-                            gap: 0.5,
-                            minWidth: 80
-                          }}>
-                            <Box sx={{
-                              width: '100%',
-                              textAlign: 'right',
-                              pr: 1
-                            }}>
-                              <Typography variant="body1" sx={{ fontWeight: 700, fontFamily: 'monospace' }}>
-                                {s.D1}
-                              </Typography>
-                            </Box>
-
-                            <Box sx={{
-                              width: '100%',
-                              borderBottom: '1px solid',
-                              borderColor: theme.palette.text.primary,
-                              position: 'relative',
-                              textAlign: 'right'
-                            }}>
-                              <Typography variant="body1" sx={{
-                                fontWeight: 700,
-                                fontFamily: 'monospace',
-                                position: 'relative',
-                                top: 2,
-                                pr: 1
-                              }}>
-                                -{s.D2}
-                              </Typography>
-                            </Box>
-
-                            <Box sx={{
-                              width: '100%',
-                              textAlign: 'right',
-                              pr: 1
-                            }}>
-                              <Typography variant="body1" sx={{
-                                fontWeight: 700,
-                                color: theme.palette.success.main,
-                                fontFamily: 'monospace'
-                              }}>
-                                {s.Sum}
-                              </Typography>
-                            </Box>
-                          </Box>
-                          {s?.CarryOut && s.CarryOut > 0 && (
-                            <Typography
-                              variant="caption"
-                              sx={{
-                                color: theme.palette.text.secondary,
-                                fontStyle: 'italic',
-                              }}
-                            >
-                              (остаток: {s.CarryOut})
-                            </Typography>
-                          )}
-                        </>
-                      ) : (
-                        <Typography
-                          variant="body1"
-                          sx={{
-                            fontWeight: 700,
-                            color: active ? theme.palette.primary.main : theme.palette.text.primary,
-                          }}
-                        >
-                          {s.D1} × {s.D2} = {s.Sum}
-                        </Typography>
-                      )}
-                    </Box>
-                  </motion.div>
-                );
-              })}
-            </Box>
+            {DivisionGrid}
           </Box>
 
           <Box sx={{
@@ -248,144 +437,72 @@ export default function DivisionVisualizer({ data }: DivisionProps) {
                   fontSize: '1.8rem'
                 }}
               >
-                {divisor}
+                {initialDivisor}
               </Typography>
             </Box>
 
-            <Box sx={{
-              pl: 2,
-              minHeight: 50,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'flex-start',
-              marginBottom: 'auto'
-            }}>
-              <Box sx={{
-                display: 'flex',
-                gap: 2,
-              }}>
-                {Array.from({ length: quotientDigits.length }).map((_, i) => {
-                  const digit = revealedQuotient[i];
-                  return (
-                    <Box
-                      key={i}
-                      sx={{
-                        width: 28,
-                        height: 28,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: 28,
-                        fontWeight: 700,
-                        color: digit ? theme.palette.success.main : 'transparent',
-                      }}
-                    >
-                      {digit || "0"}
-                    </Box>
-                  );
-                })}
-              </Box>
+            <Box sx={{ pl: 2, minHeight: 50, display: 'flex', flexDirection: 'column' }}>
+
             </Box>
           </Box>
         </Stack>
 
-        <Box sx={{ position: 'relative', width: '100%' }}>
-          {steps.slice(0, currentStep + 1).map((s, index) => {
-            if (s.Side !== "right") return null;
-
-            const active = s.Id === step.Id;
-            if (!active) return null;
-
-            return (
-              <motion.div
-                key={s.Id}
-                initial={{ scale: 0.8, opacity: 0 }}
-                animate={{ scale: 1, opacity: active ? 1 : 0.7 }}
-                transition={{ duration: 0.3 }}
-                style={{
-                  position: 'absolute',
-                  top: `${20 + index * 15}%`,
-                  right: '10%',
-                  zIndex: active ? 1000 : 1,
-                }}
-              >
-                <Paper
-                  elevation={active ? 8 : 2}
-                  sx={{
-                    p: 2,
-                    backgroundColor: active ? theme.palette.primary.light : theme.palette.grey[100],
-                    border: active ? `2px solid ${theme.palette.primary.main}` : '1px solid #e0e0e0',
-                    borderRadius: 2,
-                    minWidth: 150,
-                    textAlign: 'center',
-                  }}
-                >
-                  <Typography
-                    variant="h6"
-                    sx={{
-                      fontWeight: 700,
-                      color: active ? 'white' : theme.palette.primary.main,
-                    }}
-                  >
-                    {s.D1} ÷ {s.D2} = {s.Sum}
-                  </Typography>
-                  {active && (
-                    <motion.div
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ delay: 0.3 }}
-                    >
-                      <Typography
-                        variant="caption"
-                        sx={{
-                          color: 'white',
-                          fontStyle: 'italic',
-                        }}
-                      >
-                        Результат деления
-                      </Typography>
-                    </motion.div>
-                  )}
-                </Paper>
-              </motion.div>
-            );
-          })}
-        </Box>
-
         <Divider sx={{ my: 3 }} />
 
-        <Box sx={{ mt: 2 }}>
-          <Stack direction="row" justifyContent="space-between" alignItems="center">
-            <Stack direction="row" spacing={1}>
-              <Button
-                variant="outlined"
-                onClick={reset}
-                size="medium"
-                disabled={currentStep === 0}
+        <Box sx={{ mt: 3, minHeight: 150 }}>
+          {isStarted && !division.isCompleted && currentStep && (
+
+            <Stack spacing={2} alignItems="center">
+
+              <Paper
+                elevation={4}
+                sx={{
+                  p: 1.5,
+                  mb: 1,
+                  borderRadius: 2,
+                  textAlign: 'center',
+                  minWidth: 300,
+                  border: `2px solid ${theme.palette.info.dark}`,
+                }}
               >
-                ↶
-              </Button>
-              <Button
-                variant="outlined"
-                onClick={prevStep}
-                disabled={currentStep === 0}
-                size="medium"
-              >
-                ←
-              </Button>
-              <Button
-                variant="contained"
-                onClick={nextStep}
-                disabled={currentStep >= steps.length - 1}
-                size="medium"
-              >
-                →
-              </Button>
+                <Typography variant="caption" sx={{ color: theme.palette.warning.main }}>
+                  * Для шагов "Деление" ответ вводится в поле и нажмите «проверить».
+                </Typography>
+                <Typography variant="body1" fontWeight={600} >
+                  Шаг-{division.currentStepIndex + 1}: {currentStep.Hint}
+                </Typography>
+              </Paper>
+
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <TextField
+                  label="Ваш ответ"
+                  type="number"
+                  value={division.currentInput}
+                  onChange={(e) => setDivision(prev => ({ ...prev, currentInput: e.target.value }))}
+                  size="small"
+                  autoFocus={currentStep.action !== 'divide'}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      checkAnswer();
+                    }
+                  }}
+                />
+                <Button variant="contained" onClick={checkAnswer}>
+                  Проверить
+                </Button>
+              </Box>
+
+
             </Stack>
+          )}
 
 
-          </Stack>
-
+          {division.isCompleted && (
+            <Typography variant="h5" align="center" color="green">
+              Отлично! Деление выполнено правильно. Ответ: {fullQuotient}
+            </Typography>
+          )}
         </Box>
       </CardContent>
     </Paper>
