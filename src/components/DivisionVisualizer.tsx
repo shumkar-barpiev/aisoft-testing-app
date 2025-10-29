@@ -275,10 +275,9 @@ export default function DivisionVisualizer({ data }: DivisionProps) {
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        fontSize: 18,
+                        fontSize: 28,
                         fontWeight: 700,
                         color: digit ? theme.palette.success.main : 'transparent',
-                        borderBottom: digit ? `2px solid ${theme.palette.text.primary}` : 'none',
                       }}
                     >
                       {digit || "0"}
